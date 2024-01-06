@@ -1,0 +1,159 @@
+use project
+
+---Querying the Sales Data
+select * from [dbo].[sales_data]
+
+--Checking unique values
+select distinct status from [dbo].[sales_data] 
+select distinct year_id from [dbo].[sales_data]
+select distinct PRODUCTLINE from [dbo].[sales_data] 
+select distinct COUNTRY from [dbo].[sales_data] 
+select distinct DEALSIZE from [dbo].[sales_data] 
+select distinct TERRITORY from [dbo].[sales_data] 
+
+select distinct MONTH_ID from [dbo].[sales_data]
+where year_id = 2003
+
+--SALES ANALYSIS
+---Let's start by grouping sales by productline
+select PRODUCTLINE, sum(sales) Revenue
+from [dbo].[sales_data]
+group by PRODUCTLINE
+order by 2 desc
+
+---What year generated the highest sales
+select YEAR_ID, sum(sales) Revenue
+from [dbo].[sales_data]
+group by YEAR_ID
+order by 2 desc
+
+---Which Dealer size has the highest generated revenue
+select  DEALSIZE,  sum(sales) Revenue
+from [dbo].[sales_data]
+group by  DEALSIZE
+order by 2 desc
+
+
+----What was the best month for sales in a specific year? How much was earned that month? 
+
+with sale as (
+	select YEAR_ID, MONTH_ID, count(ORDERNUMBER) Frequency, sum(sales) Revenue
+	from sales_data
+	group by YEAR_ID, Month_id
+)
+	select * 
+	from sale
+	where Revenue in (select max(Revenue) over(partition by (year_id) ) from sale) 
+
+
+--November seems to be the month, what product do they sell in November?
+with sale as (
+	select YEAR_ID, PRODUCTLINE, MONTH_ID, count(ORDERNUMBER) Frequency, sum(sales) Revenue
+	from sales_data
+	group by YEAR_ID, PRODUCTLINE, Month_id
+)
+	select * 
+	from sale
+	where Revenue in (select max(Revenue) over(partition by (year_id) ) from sale)
+
+--Which country buys the most?
+with sale as (
+	select country, YEAR_ID, PRODUCTLINE, MONTH_ID, count(ORDERNUMBER) Frequency, sum(sales) Revenue
+	from sales_data
+	group by country, YEAR_ID, PRODUCTLINE, Month_id
+)
+	select * 
+	from sale
+	where Revenue in (select max(Revenue) over(partition by (year_id) ) from sale)
+
+
+--why did Classic cars sell more?
+--There are several factor responsible for the Purchase of classic cars
+
+--select  PRODUCTLINE, MONTH_ID, sum(sales) Revenue, count(ORDERNUMBER) Frequency, AVG(priceeach) Price, max(priceeach) Max_price
+--from [dbo].[sales_data]
+--where YEAR_ID = 2003 --change year to see the rest
+--group by PRODUCTLINE, MONTH_ID
+--order by 2 
+
+--select PRODUCTLINE, MONTH_ID, sum(sales) Revenue, count(ORDERNUMBER) Frequency
+--from [dbo].[sales_data]
+--where YEAR_ID = 2004 --change year to see the rest
+--group by PRODUCTLINE, MONTH_ID
+--order by 2 desc
+
+--select PRODUCTLINE, MONTH_ID, sum(sales) Revenue, count(ORDERNUMBER) Frequency
+--from [dbo].[sales_data]
+--where YEAR_ID = 2005 --change year to see the rest
+--group by PRODUCTLINE, MONTH_ID
+--order by 2 desc
+
+----Who is our best customer (this could be best answered with RFM)
+
+
+DROP TABLE IF EXISTS #rfm
+;with rfm as 
+(
+	select 
+		CUSTOMERNAME, 
+		sum(sales) MonetaryValue,
+		avg(sales) AvgMonetaryValue,
+		count(ORDERNUMBER) Frequency,
+		max(ORDERDATE) last_order_date,
+		(select max(ORDERDATE) from [dbo].[sales_data]) max_order_date,
+		DATEDIFF(DD, max(ORDERDATE), (select max(ORDERDATE) from [dbo].[sales_data])) Recency
+	from [dbo].[sales_data]
+	group by CUSTOMERNAME
+),
+rfm_calc as
+(
+
+	select r.*,
+		NTILE(4) OVER (order by Recency desc) rfm_recency,
+		NTILE(4) OVER (order by Frequency) rfm_frequency,
+		NTILE(4) OVER (order by MonetaryValue) rfm_monetary
+	from rfm r
+)
+select 
+	c.*, rfm_recency+ rfm_frequency+ rfm_monetary as rfm_cell,
+	cast(rfm_recency as varchar) + cast(rfm_frequency as varchar) + cast(rfm_monetary  as varchar) rfm_concat
+into #rfm
+from rfm_calc c
+
+select CUSTOMERNAME , rfm_recency, rfm_frequency, rfm_monetary,
+	case 
+		when rfm_concat in (111, 112, 113, 114, 121, 122, 123, 124) then 'Churners'
+		when rfm_concat in (131, 132, 141, 142, 133, 134, 143, 144, 211, 212, 213, 214, 221, 222, 223, 224, 231, 232, 233, 234, 241, 242, 243, 244) then 'Potential Churners'
+		when rfm_concat in (311, 312, 313, 314, 321, 322, 323, 324, 411, 412, 413, 414, 421, 422, 423, 424) then 'New Customers'
+		when rfm_concat in (331, 332, 333, 334, 341, 342, 343, 344, 431, 432) then 'Active'
+		when rfm_concat in (433, 434, 441, 442, 443, 444) then 'Loyal Customers'
+	end rfm_segment
+from #rfm
+
+
+--What products are most often sold together? 
+--select * from [dbo].[sales_data] where ORDERNUMBER =  10411
+
+select distinct OrderNumber, stuff(
+
+	(select ',' + PRODUCTCODE
+	from [dbo].[sales_data] p
+	where ORDERNUMBER in 
+		(
+			select ORDERNUMBER
+			from (
+				select ORDERNUMBER, count(*) No_of_similar_order
+				FROM [dbo].[sales_data] 
+				where STATUS = 'Shipped'
+				group by ORDERNUMBER
+			)m
+			where No_of_similar_order = 3
+		)
+		and p.ORDERNUMBER = s.ORDERNUMBER
+		for xml path (''))
+
+		, 1, 1, '') ProductCodes
+
+from [dbo].[sales_data] s
+order by 2 desc
+
